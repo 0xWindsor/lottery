@@ -17,54 +17,94 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 */ 
 
 /** Notes
+    // - uint immutable => uint won't change after assign ever.
+    // -
     // - Arrange lottery for a decentralized randomizer
-    // - Look for donation address. Maybe put it into 
     // - Test payables. ownersCut-donation-prizeclaim etc.
-    // - Import onlyOwner
-    // - look for "delete participants"
-    // - look for percantage * for ownersPercentage etc.
 */
 
 /** 
-     * 
+    * Errors
+*/
+
+/** 
+
+    /// @notice Sale is either open or not while it shouldn't.
+    /// @param 
+    error WrongSaleState(bool saleState);
+
+    /// @notice 
+    /// @param 
+    error WrongDonationState(bool donationState);
+
+    /// @notice 
+    /// @param 
+    error RandomNumberPicked(bool randomNumberPicked);
+
+    /// @notice Message value is less than ticket price.
+    /// @param value msg.value
+    error NotEnoughMoneyInput(uint value);
+
+    /// @notice Sender is not the winner.
+    /// @param sender msg.sender
+    error Unauthorized(address sender);
+
+    /// @notice 
+    /// @param 
+    error PrizeAlreadyClaimed();
+
+    /// @notice 
+    /// @param 
+    error PrizeClaimTimePassed();
+
+    /// @notice Owner claimed their share before.
+    /// @param ownerClaimed state of ownerClaimed
+    error OwnerAlreadyClaimed();
+*/
+
+
+/** 
+     * @custom:author  0xWindsor
+     * @custom:contributor  0xWindsor
      * 
      */
 contract lottery1 is Ownable {
 
-
-
-    uint ticketPrice = 1 wei;
+    uint immutable ticketPrice = 1 wei;
 
     /// @notice The time until sale ends. (Period of people can buy) 
-    uint saleCooldownTime = 30 days;
-    uint saleCooldownReadyTime; 
+    uint immutable saleCooldownTime = 10 minutes;
+    uint public saleCooldownReadyTime; 
 
-    bool randomNumberPicked;
-    bool prizeClaimable;
-    bool prizeClaimed;
-    bool donationHasMade;
-    bool ownerClaimed;
+    bool public randomNumberPicked;
+    bool public prizeClaimable;
+    bool public prizeClaimed;
+    bool public donationHasMade;
+    bool private ownerClaimed;
 
     /// @notice PrizeClaimCooldownTime is less than saleCooldownTime.
     /// It's a game-design choice. When the next lottery starts, participants 
     /// will know if the prize is transfered to other round.
-    uint prizeClaimCooldownTime = 15 days;
-    uint prizeClaimTime; 
+    uint immutable prizeClaimCooldownTime = 5 minutes;
+    uint public prizeClaimTime; 
 
     /// @notice The percentages that parties will receive from the prize pool.
-    uint prizePercentage = 90;
-    uint donationPercentage = 5;
-    uint ownersPercentage = 5;
+    uint immutable prizePercentage = 90;
+    uint immutable donationPercentage = 5;
+    uint immutable ownersPercentage = 5;
 
     /// @notice Amounts parties will receive from the prize pool. 
-    uint prizeAmount;
-    uint donationAmount;
-    uint ownersCut;
+    uint private prizeAmount;
+    uint private donationAmount;
+    uint private ownersCut;
 
-    address[] participants;
-    address winner;
-    address donationAddress; /// Donation address may be changed by the owner by the function changeDonationAddress. 
+    // @notice lottery => (index => participants)
+    mapping(uint => mapping(uint => address)) public participants;
+    address public winner;
+    address public donationAddress; /// Donation address may be changed by the owner by the function changeDonationAddress. 
 
+    uint private currentIndex = 0; // Participants register number.
+    uint public lotteryNumber = 0; // Using with "participant" and tracks which lottery roll we're in. 
 
     /*////////////////////////////////////////////////
         //            PUBLIC FUNCTIONS          //    
@@ -74,11 +114,12 @@ contract lottery1 is Ownable {
      * @notice Adds msg.sender to participants list if gets paid enough. 
      * @notice No money refund if paid too much, becareful.
      */
-    function buyTicket() public payable {
-            require(_saleIsOpen()); // Check if the sale is still open.
-            require(msg.value >= ticketPrice);
-
-            participants.push(msg.sender);
+    function buyTicket(uint _amount) public payable {
+        require(_saleIsOpen(), "WrongSaleState"); // Check if the sale is still open.
+        require(msg.value >= ticketPrice, "NotEnoughMoneyInput");
+        
+        participants[lotteryNumber][currentIndex] = msg.sender;
+        currentIndex += _amount;
     }
 
     /** 
@@ -86,11 +127,18 @@ contract lottery1 is Ownable {
      * 
      */
     function lottery() public {
-            require(!_saleIsOpen());
-            require(!randomNumberPicked);
+            require(!_saleIsOpen(), "WrongSaleState");
+            require(!randomNumberPicked, "RandomNumberPicked");
 
             uint _randomNumber = _getRandomNumber();
-            winner = participants[_randomNumber];
+            winner = participants[lotteryNumber][_randomNumber];
+            if(winner == address(0x0)) {
+                do {
+                    _randomNumber--;
+                    winner = participants[lotteryNumber][_randomNumber];
+                } while(winner == address(0x0));
+            }
+
             randomNumberPicked = true;
 
             _dividePrize();
@@ -105,9 +153,9 @@ contract lottery1 is Ownable {
      * @param _donate If not claimed, donate the prize or not.
      */
     function claimPrize(bool _claim, bool _donate) public {
-        require(msg.sender == winner);
-        require(prizeClaimable); // Prize isn't claimed before.
-        require(uint(block.timestamp) <= prizeClaimTime); // 
+        require(msg.sender == winner, "Unauthorized");
+        require(prizeClaimable, "PrizeAlreadyClaimed"); // Prize isn't claimed before.
+        require(uint(block.timestamp) <= prizeClaimTime, "PrizeClaimTimePassed"); // 
 
         if(_claim) {
             payable(msg.sender).transfer(prizeAmount);
@@ -127,8 +175,8 @@ contract lottery1 is Ownable {
      * 
      */
     function donate() public {
-        require(randomNumberPicked);
-        require(!donationHasMade);
+        require(randomNumberPicked, "RandomNumberNotPicked");
+        require(!donationHasMade, "WrongDonationState");
         payable(donationAddress).transfer(donationAmount);
         donationHasMade = true;
     }
@@ -138,8 +186,8 @@ contract lottery1 is Ownable {
      * 
      */
     function ownerClaim() public {
-        require(donationHasMade); // To this should be true, first the number must be picked. So we check it there. 
-        require(!ownerClaimed);
+        require(donationHasMade, "WrongDonationState"); // To this should be true, first the number must be picked. So we check it there. 
+        require(!ownerClaimed, "OwnerAlreadyClaimed");
         payable(owner()).transfer(ownersCut);
         ownerClaimed = true;
         _startSale();
@@ -150,7 +198,7 @@ contract lottery1 is Ownable {
      * 
      */
     function changeDonationAddress(address _newDonationAddress) public onlyOwner {
-        require(_saleIsOpen());
+        require(_saleIsOpen(), "WrongSaleState");
         donationAddress = _newDonationAddress;
     }
 
@@ -160,10 +208,10 @@ contract lottery1 is Ownable {
     ////////////////////////////////////////////////*/
 
     function soldTickets() public view returns(uint) {
-        return(participants.length);
+        return(currentIndex - 1);
     }
 
-    function prizePool() public view returns(uint) {
+    function seeMoneyPool() public view returns(uint) {
         return(address(this).balance);
     }
 
@@ -171,25 +219,17 @@ contract lottery1 is Ownable {
         return(address(this).balance * prizePercentage);
     }
 
-    function seeWinner() public view returns(address) {
-        return(winner);
-    }
-
-    function seeDonationAddress() public view returns(address) {
-        return(donationAddress);
-    }
 
     /*////////////////////////////////////////////////
         //          INTERNAL FUNCTIONS          //    
     ////////////////////////////////////////////////*/
-
 
     /** 
      * 
      * 
      */
     function _getRandomNumber() internal view returns(uint) {
-            return(uint(keccak256(abi.encodePacked(block.difficulty, block.timestamp % participants.length))));
+            return(uint(keccak256(abi.encodePacked(block.difficulty, block.timestamp % currentIndex - 1))));
     }
 
     /** 
@@ -208,7 +248,7 @@ contract lottery1 is Ownable {
      * 
      */
     function _startSale() internal {
-            require(!_saleIsOpen()); /// Check if the sale is still going. 
+            require(!_saleIsOpen(), "SaleIsOpen"); /// Check if the sale is still going. 
             saleCooldownReadyTime = uint(block.timestamp + saleCooldownTime); /// If sale's not going, set when it'll end.
             randomNumberPicked = false; 
             prizeClaimable = false;
@@ -220,7 +260,7 @@ contract lottery1 is Ownable {
              * we've set it to false above, so we're safe.
              */
             ownerClaimed = false; 
-            delete participants; /// Reset participants.
+            lotteryNumber++; /// Reset participants.
     }
 
     /** 
@@ -235,3 +275,101 @@ contract lottery1 is Ownable {
     }
 }
 
+/** 
+    *   _saleIsOpen()
+    *   !_saleIsOpen()
+    *
+    *   donationHasMade
+    *   !donationHasMade
+    *
+    *   randomNumberPicked
+    *   !randomNumberPicked
+    *
+    *   msg.value >= ticketPrice
+    *
+    *   msg.sender == winner
+    *   
+    *   prizeClaimable
+    *   
+    *   uint(block.timestamp) <= prizeClaimTime
+    *   
+    *   !ownerClaimed
+    *   
+    *   
+    *   
+    *   
+    */
+
+/**
+
+The time until sale ends. (Period of people can buy) 
+
+PrizeClaimCooldownTime is less than saleCooldownTime. It's a game-design choice. When the next lottery starts, participants will know if the prize is transfered to other round.
+
+The percentages that parties will receive from the prize pool.
+
+Amounts parties will receive from the prize pool. 
+
+Donation address may be changed by the owner by the function changeDonationAddress.
+
+Participants register number.
+
+Using with "participant" and tracks which lottery roll we're in.
+
+Adds msg.sender to participants list if gets paid enough.
+
+No money refund if paid too much, becareful.
+
+Check if the sale is still open.
+
+Lets winner to choose from claim, donate or to keep prize to other round.
+
+If wanted to claim the prize or not.
+
+If not claimed, donate the prize or not.
+
+Prize isn't claimed before.
+
+If not claimed, donate or not.
+
+If both not claimed and not donated, do nothing.
+
+In every case, if function is called, close claimable.
+
+To this should be true, first the number must be picked. So we check it there.
+
+Divides current prize pool to pieces.
+
+Check if the sale is still going. 
+
+If sale's not going, set when it'll end.
+
+We can set this to false cuz if owner wants to claim, the donation should've been made. But we've set it to false above, so we're safe.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ */
