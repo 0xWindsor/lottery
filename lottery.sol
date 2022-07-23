@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 
 /** Roadmap
     // - pay => get added to the list
@@ -69,6 +71,18 @@ import "@openzeppelin/contracts/access/Ownable.sol";
      * 
      */
 contract lottery1 is Ownable {
+    
+    /// @dev Took from Chainlink VRF and implemented to the contract. Below variables are from the example VRFv2Consumer contract.
+    /// @notice
+    VRFCoordinatorV2Interface COORDINATOR;
+    uint64 s_subscriptionId; // Chainlink VRF subscription ID.
+    address vrfCoordinator = 0x6168499c0cFfCaCD319c818142124B7A15E857ab; // Chainlink coordinator.
+    bytes32 keyHash = 0xd89b2bf150e3b9e13446986e571fb9cab24b13cea0a43ea20a6049a85cc807cc; // Chainlink keyHash
+    uint32 callbackGasLimit = 100000; //
+    uint16 requestConfirmations = 3;
+    uint32 numWords =  1;
+    uint256[] public s_randomWords;
+    uint256 public s_requestId;
 
     uint immutable ticketPrice = 1 wei;
 
@@ -106,6 +120,12 @@ contract lottery1 is Ownable {
     uint private currentIndex = 0; // Participants register number.
     uint public lotteryNumber = 0; // Using with "participant" and tracks which lottery roll we're in. 
 
+    constructor(uint64 subscriptionId) VRFConsumerBaseV2(vrfCoordinator) {
+        COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
+        s_owner = msg.sender;
+        s_subscriptionId = subscriptionId;
+    }
+
     /*////////////////////////////////////////////////
         //            PUBLIC FUNCTIONS          //    
     ////////////////////////////////////////////////*/
@@ -130,21 +150,7 @@ contract lottery1 is Ownable {
             require(!_saleIsOpen(), "WrongSaleState");
             require(!randomNumberPicked, "RandomNumberPicked");
 
-            uint _randomNumber = _getRandomNumber();
-            winner = participants[lotteryNumber][_randomNumber];
-            if(winner == address(0x0)) {
-                do {
-                    _randomNumber--;
-                    winner = participants[lotteryNumber][_randomNumber];
-                } while(winner == address(0x0));
-            }
-
-            randomNumberPicked = true;
-
-            _dividePrize();
-
-            prizeClaimable = true;
-            prizeClaimTime = prizeClaimCooldownTime + block.timestamp;
+            requestRandomWords();
     }
 
     /** 
@@ -224,12 +230,41 @@ contract lottery1 is Ownable {
         //          INTERNAL FUNCTIONS          //    
     ////////////////////////////////////////////////*/
 
-    /** 
-     * 
-     * 
-     */
-    function _getRandomNumber() internal view returns(uint) {
-            return(uint(keccak256(abi.encodePacked(block.difficulty, block.timestamp % currentIndex - 1))));
+    /// @dev Chainlink VRF function.
+    /// @dev Proceeds with fullfilRandomWords function which gets called by ChainlinkVRF.
+    function requestRandomWords() internal {
+        // Will revert if subscription is not set and funded.
+        s_requestId = COORDINATOR.requestRandomWords(
+        keyHash,
+        s_subscriptionId,
+        requestConfirmations,
+        callbackGasLimit,
+        numWords
+        );
+    }
+
+    /// @dev Called by ChainlinkVRF after calling requestRandomWords.
+    /// @dev Completes lottery function.
+    function fulfillRandomWords(
+    uint256, /* requestId */
+    uint256[] memory randomWords
+    ) internal override {
+        s_randomWords = randomWords;
+
+        winner = participants[lotteryNumber][s_randomWords[0]];
+        if(winner == address(0x0)) {
+                do {
+                    _randomNumber--;
+                    winner = participants[lotteryNumber][_randomNumber];
+                } while(winner == address(0x0));
+        }
+
+        randomNumberPicked = true;
+
+        _dividePrize();
+
+        prizeClaimable = true;
+        prizeClaimTime = prizeClaimCooldownTime + block.timestamp;
     }
 
     /** 
@@ -275,101 +310,49 @@ contract lottery1 is Ownable {
     }
 }
 
-/** 
-    *   _saleIsOpen()
-    *   !_saleIsOpen()
-    *
-    *   donationHasMade
-    *   !donationHasMade
-    *
-    *   randomNumberPicked
-    *   !randomNumberPicked
-    *
-    *   msg.value >= ticketPrice
-    *
-    *   msg.sender == winner
-    *   
-    *   prizeClaimable
-    *   
-    *   uint(block.timestamp) <= prizeClaimTime
-    *   
-    *   !ownerClaimed
-    *   
-    *   
-    *   
-    *   
-    */
-
 /**
 
-The time until sale ends. (Period of people can buy) 
+    The time until sale ends. (Period of people can buy) 
 
-PrizeClaimCooldownTime is less than saleCooldownTime. It's a game-design choice. When the next lottery starts, participants will know if the prize is transfered to other round.
+    PrizeClaimCooldownTime is less than saleCooldownTime. It's a game-design choice. When the next lottery starts, participants will know if the prize is transfered to other round.
 
-The percentages that parties will receive from the prize pool.
+    The percentages that parties will receive from the prize pool.
 
-Amounts parties will receive from the prize pool. 
+    Amounts parties will receive from the prize pool. 
 
-Donation address may be changed by the owner by the function changeDonationAddress.
+    Donation address may be changed by the owner by the function changeDonationAddress.
 
-Participants register number.
+    Participants register number.
 
-Using with "participant" and tracks which lottery roll we're in.
+    Using with "participant" and tracks which lottery roll we're in.
 
-Adds msg.sender to participants list if gets paid enough.
+    Adds msg.sender to participants list if gets paid enough.
 
-No money refund if paid too much, becareful.
+    No money refund if paid too much, becareful.
 
-Check if the sale is still open.
+    Check if the sale is still open.
 
-Lets winner to choose from claim, donate or to keep prize to other round.
+    Lets winner to choose from claim, donate or to keep prize to other round.
 
-If wanted to claim the prize or not.
+    If wanted to claim the prize or not.
 
-If not claimed, donate the prize or not.
+    If not claimed, donate the prize or not.
 
-Prize isn't claimed before.
+    Prize isn't claimed before.
 
-If not claimed, donate or not.
+    If not claimed, donate or not.
 
-If both not claimed and not donated, do nothing.
+    If both not claimed and not donated, do nothing.
 
-In every case, if function is called, close claimable.
+    In every case, if function is called, close claimable.
 
-To this should be true, first the number must be picked. So we check it there.
+    To this should be true, first the number must be picked. So we check it there.
 
-Divides current prize pool to pieces.
+    Divides current prize pool to pieces.
 
-Check if the sale is still going. 
+    Check if the sale is still going. 
 
-If sale's not going, set when it'll end.
+    If sale's not going, set when it'll end.
 
-We can set this to false cuz if owner wants to claim, the donation should've been made. But we've set it to false above, so we're safe.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    We can set this to false cuz if owner wants to claim, the donation should've been made. But we've set it to false above, so we're safe.
  */
