@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.9;
+pragma solidity ^0.8.7;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
 import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
@@ -70,7 +70,7 @@ import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
      * @custom:contributor  0xWindsor
      * 
      */
-contract lottery1 is Ownable {
+contract lottery1 is VRFConsumerBaseV2, Ownable {
     
     /// @dev Took from Chainlink VRF and implemented to the contract. Below variables are from the example VRFv2Consumer contract.
     /// @notice
@@ -122,7 +122,6 @@ contract lottery1 is Ownable {
 
     constructor(uint64 subscriptionId) VRFConsumerBaseV2(vrfCoordinator) {
         COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
-        s_owner = msg.sender;
         s_subscriptionId = subscriptionId;
     }
 
@@ -251,7 +250,9 @@ contract lottery1 is Ownable {
     ) internal override {
         s_randomWords = randomWords;
 
-        winner = participants[lotteryNumber][s_randomWords[0]];
+
+        uint _randomNumber = (s_randomWords[0] % currentIndex - 1);
+        winner = participants[lotteryNumber][_randomNumber];
         if(winner == address(0x0)) {
                 do {
                     _randomNumber--;
@@ -355,4 +356,5 @@ contract lottery1 is Ownable {
     If sale's not going, set when it'll end.
 
     We can set this to false cuz if owner wants to claim, the donation should've been made. But we've set it to false above, so we're safe.
+
  */
